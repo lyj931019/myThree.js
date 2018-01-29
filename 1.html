@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<!-- mtl & obj 模型导入模板 -->
+    <!-- obj太大会导致浏览器崩溃！ -->
+    <title>three.js webgl - cloth simulation</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+        body {
+            font-family: Monospace;
+            background-color: #000;
+            color: #000;
+            margin: 0px;
+            overflow: hidden;
+        }
+
+        #info {
+            position: absolute;
+            padding: 10px;
+            width: 100%;
+            text-align: center;
+        }
+
+        a {
+            text-decoration: underline;
+            cursor: pointer;
+        }
+        span{
+            color : #fff;
+        }
+
+    </style>
+    <script src="js/jquery.js"></script>
+    <script src="js/Tween.js"></script>
+</head>
+
+<body style="text-align: center;">
+
+
+
+
+<script src="js/three.js"></script>
+
+<script src="js/Detector.js"></script>
+<script src="js/loaders/OBJLoader.js"></script>
+<script src="js/loaders/DDSLoader.js"></script>
+<script src="js/loaders/MTLLoader.js"></script>
+<script src="js/controls/OrbitControls.js"></script>
+<script src="js/libs/stats.min.js"></script>
+
+<script>
+
+    /*
+    * 格按钮的单独控制，防止乱点的动作污染
+    * */
+    // 模拟出货
+    let canDSellFlow = true;
+    // 当任意一个按钮对应的动画正在执行的时候，不允许执行其他的动画，且不允许执行自己
+    let canDo = false;
+    //  可以拆分
+    let canBreak  = false;
+
+    /* testing cloth simulation */
+
+    var container, stats; // 容器，状态显示器（帧数）
+    var camera, scene, renderer; // 相机，场景，渲染器
+    var tweenMover, tweenDoor, tweenScreen, tweenDrink, tweenDS; // 各模型对应的tweenJs动画
+    var tweenDR, tweenSR, tweenDSR;//大门的旋转，门的rotation，屏幕的rotation，取货门的rotation
+    var tweenGetDrink = []; // 模拟出货的 一系列 tweenJs动画 数组
+    var initArr = [0, -250, 0]; // 保存初始状态的数组
+    var initObj = { // 保存初始状态的对象，可用initArr代替，但这样更见名知意
+        x: 0,
+        y: -250,
+        z: 0
+    };
+
+    var isLoaded = [];
+    for (let i = 0; i < 9; i++) {
+        isLoaded.push(false);
+    }
+
+    var body, screen, ds, door, wheel, slots, goods, mover, drink; // 分别保存各模型
+    let tweenOpacity = new TWEEN.Tween({x:1});
+
+
+    /*
+    * 初始化 three ， 所有webGl元素，以及tweenJs动画
+    * */
+    function init() {
+        // three ---> container
+        function initThree() {
+            container = document.createElement('div');
+            document.body.appendChild(container);
+        }
+
+        // scene
+        function initScene() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xcce0ff);
+//            scene.fog = new THREE.Fog( 0xcce0ff, 500, 10000 );
+            scene.background = new THREE.CubeTextureLoader()// 场景的背景图片，由6张图片无缝连接而成
+                .setPath('../models/textures/cube/skybox/')
+                .load(['px.jpg', 'nx.jpg', 'py.jpg', 'ny.jpg', 'pz.jpg', 'nz.jpg']);
+        }
+
+        // camera
+        function initCamera() {
+            camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 1, 10000);
+            camera.position.set(1000, 50, 1500);
+        }
+
+        // lights
+        function initLight() {
+            var light, materials;
+			// 环境光
+            scene.add(new THREE.AmbientLight(0x666666));
+			// 平行光
+            light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(-600, 500, 600);
+//            light.position.multiplyScalar(1);
+//            light.scale.multiplyScalar( 10.0 );
+
+            light.castShadow = true;
+
+            light.shadow.mapSize.width = 1024;
+            light.shadow.mapSize.height = 1024;
+
+            var d = 1000; //控制平行光大小
+
+            light.shadow.camera.left = -d;
+            light.shadow.camera.right = d;
+            light.shadow.camera.top = d;
+            light.shadow.camera.bottom = -d;
+
+            light.shadow.camera.far = 10000;
+
+            scene.add(light);
+
+
+            scene.add(new THREE.CameraHelper(light.shadow.camera));
+            var sphere = new THREE.SphereGeometry(0.5, 16, 8);
+			// 点光源
+            var pointLight = new THREE.PointLight(0xffffff, 1, 600);
+            pointLight.add(new THREE.Mesh(sphere, new THREE.MeshBasicMaterial({color: 0xff0040})));
+            pointLight.position.set(0, 325, 0);
+            console.log(light);
+            scene.add(pointLight);
+
+
+        }
+
+        // object
+        function initObject() {
+
+            var manager = new THREE.LoadingManager();
+            manager.onProgress = function (item, loaded, total) {
+                console.log(item, loaded, total);
+            };
+            var onProgress = function (xhr) {
+                if (xhr.lengthComputable) {
+                    var percentComplete = xhr.loaded / xhr.total * 100;
+                    console.log(Math.round(percentComplete, 2) + '% downloaded');
+                }
+            };
+            var onError = function (xhr) {
+            };
+
+            function loadObj(obj) {
+                return new Promise(function (resolve, reject) {
+                    let path = 'models/';// 地址
+                    let thisObj;
+                    let mtlLoader = new THREE.MTLLoader();
+                    mtlLoader.setPath(path);
+                    mtlLoader.load(obj + '.mtl', function (materials) {
+                        materials.preload();
+                        materials.opacity = 0.2;
+                        materials.transparent = true;
+                        let objLoader = new THREE.OBJLoader();
+                        objLoader.setMaterials(materials);
+                        objLoader.setPath(path);
+                        objLoader.load(obj + '.obj', function (object) {
+                            object.position.y = -250;
+                            object.scale.x = 0.3;
+                            object.scale.y = 0.3;
+                            object.scale.z = 0.3;
+                            //由于我们的素材并不是看上去的一个整体，所以需要进行迭代
+                            for (let k in object.children) {  //对其中的所有孩子都设置接收阴影以及投射阴影,才能看到阴影效果
+                                object.children[k].castShadow = true;   //设置该对象可以产生阴影
+                                object.children[k].receiveShadow = true;  //设置该对象可以接收阴影
+                            }
+                            isLoaded[obj - 1] = true;
+                            resolve(object);
+                            scene.add(object);
+                        }, onProgress, onError);
+                    });
+                })
+            }
+
+            async function loadAllObj() {
+                // loadObj的参数是文件名，mtl和obj文件名需一致
+                await loadObj(1).then((obj) => { // body
+                    obj.position.set(...initArr);
+                    body = obj;// 保存该模型
+                    console.log(obj);
+                });
+
+                // screen
+                await loadObj(2).then((obj) => { // screen
+                    obj.position.set(...initArr);
+                    screen = obj;
+                    tweenScreen = new TWEEN.Tween(obj.position);
+                    tweenSR = new TWEEN.Tween(obj.rotation);
+                    for(let tmp of screen.children[0].material){
+                        tmp.transparent = true;//可透明
+                    }
+
+                });
+				// ....
+
+            loadAllObj();
+        }
+
+        // ground
+        function initGround() {
+            var loader = new THREE.TextureLoader();
+//				var groundTexture = loader.load( '../models/textures/terrain/grasslight-big.jpg' );
+            var groundTexture = loader.load('../models/textures/hardwood2_roughness.jpg');
+            groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
+            groundTexture.repeat.set(25, 25);
+            groundTexture.anisotropy = 16;
+
+            var groundMaterial = new THREE.MeshLambertMaterial({map: groundTexture});
+
+            var mesh = new THREE.Mesh(new THREE.PlaneBufferGeometry(20000, 20000), groundMaterial);
+            mesh.position.y = -250;
+            mesh.rotation.x = -Math.PI / 2;
+            mesh.receiveShadow = true;
+            scene.add(mesh);
+        }
+
+        //renderer
+        function initRender() {
+            renderer = new THREE.WebGLRenderer({antialias: true});
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            container.appendChild(renderer.domElement);
+
+            renderer.gammaInput = true;
+            renderer.gammaOutput = true;
+
+            renderer.shadowMap.enabled = true;
+        }
+
+        // controls
+        function initControls() {
+            var controls = new THREE.OrbitControls(camera, renderer.domElement);
+//            controls.maxPolarAngle = Math.PI * 0.5;
+//            controls.minPolarAngle = Math.PI * 0.5;
+            controls.minDistance = 1000;
+            controls.maxDistance = 5000;
+        }
+
+        // stats
+        function initStats() {
+            stats = new Stats();
+            container.appendChild(stats.dom);
+        }
+
+        initThree(); // 初始化容器
+        initScene(); // 初始化场景
+        initCamera(); // 初始化相机
+        initLight(); // 初始化灯光
+        initObject(); // 初始化模型
+        initGround(); // 初始化地面
+        initRender(); // 初始化渲染器
+        initControls(); // 初始化控制器，现为轨迹球，应该要改为鼠标事件
+        initStats(); // 初始化帧数显示器
+
+    }
+
+
+    // resize
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // 控制渲染帧数
+    function animate() {
+        requestAnimationFrame(animate);
+        render();
+        stats.update();// 更新帧数显示器
+    }
+
+    // 动画主函数，重新渲染
+    function render() {
+    //    TWEEN.update(); 更新Tween.js
+        renderer.render(scene, camera);
+    }
+
+    // 调用
+    init();
+    animate();
+
+   
+   
+
+    
+
+   
+
+</script>
+</body>
+</html>
